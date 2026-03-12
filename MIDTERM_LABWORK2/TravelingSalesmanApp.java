@@ -24,6 +24,7 @@ import javax.swing.filechooser.FileNameExtensionFilter;
  * Theme  : Vintage Road-Trip / Highway Map
  * Algo   : Dijkstra's Shortest Path
  * Feature: Animated car driving along the shortest path
+ * Layout : Force-Directed Graph — connected nodes cluster naturally
  */
 public class TravelingSalesmanApp extends JFrame {
 
@@ -103,12 +104,91 @@ public class TravelingSalesmanApp extends JFrame {
     }
     private void showErr(String m){JOptionPane.showMessageDialog(this,m,"Error",JOptionPane.ERROR_MESSAGE);}
 
-    private void assignNodePositions(){
-        int cx=400, cy=310, r=215;
-        for(int i=0;i<nodes.size();i++){
-            double a=2*Math.PI*i/nodes.size()-Math.PI/2;
-            nodePositions.put(nodes.get(i),
-                new Point(cx+(int)(r*Math.cos(a)), cy+(int)(r*Math.sin(a))));
+    // ── Force-Directed Layout ─────────────────────────────────────────────────
+    // Connected nodes attract each other; all nodes repel.
+    // Result: the graph draws itself as a natural road network
+    // where every edge visibly connects its two endpoints.
+    private void assignNodePositions() {
+        int W = 760, H = 600, PAD = 75;
+        int n = nodes.size();
+        if (n == 0) return;
+
+        // --- Seed: evenly spaced circle ---
+        Map<String, double[]> pos = new LinkedHashMap<>();
+        for (int i = 0; i < n; i++) {
+            double angle = 2 * Math.PI * i / n - Math.PI / 2;
+            double r = Math.min(W, H) * 0.32;
+            pos.put(nodes.get(i), new double[]{
+                W / 2.0 + r * Math.cos(angle),
+                H / 2.0 + r * Math.sin(angle)
+            });
+        }
+
+        // Ideal spring length — scales with canvas area and node count
+        double k      = Math.sqrt((double)(W * H) / Math.max(n, 1));
+        double idealL = k * 1.05;
+        double repK   = k * k * 2.0;
+
+        // --- Iterative force simulation ---
+        for (int iter = 0; iter < 400; iter++) {
+            Map<String, double[]> disp = new HashMap<>();
+            for (String nd : nodes) disp.put(nd, new double[]{0, 0});
+
+            // Repulsion: every pair of nodes pushes apart
+            for (int i = 0; i < n; i++) {
+                for (int j = i + 1; j < n; j++) {
+                    String ni = nodes.get(i), nj = nodes.get(j);
+                    double[] pi = pos.get(ni), pj = pos.get(nj);
+                    double dx = pi[0] - pj[0], dy = pi[1] - pj[1];
+                    double dist = Math.max(Math.sqrt(dx * dx + dy * dy), 1.0);
+                    double force = repK / (dist * dist);
+                    double fx = (dx / dist) * force, fy = (dy / dist) * force;
+                    disp.get(ni)[0] += fx;  disp.get(ni)[1] += fy;
+                    disp.get(nj)[0] -= fx;  disp.get(nj)[1] -= fy;
+                }
+            }
+
+            // Attraction: edges pull connected pairs together
+            Set<String> visited = new HashSet<>();
+            for (Edge e : allEdges) {
+                String key = e.from.compareTo(e.to) < 0
+                    ? e.from + "|" + e.to : e.to + "|" + e.from;
+                if (!visited.add(key)) continue;
+                double[] pi = pos.get(e.from), pj = pos.get(e.to);
+                if (pi == null || pj == null) continue;
+                double dx = pj[0] - pi[0], dy = pj[1] - pi[1];
+                double dist = Math.max(Math.sqrt(dx * dx + dy * dy), 1.0);
+                double stretch = (dist - idealL) / dist * 0.30;
+                double fx = dx * stretch, fy = dy * stretch;
+                disp.get(e.from)[0] += fx;  disp.get(e.from)[1] += fy;
+                disp.get(e.to)[0]   -= fx;  disp.get(e.to)[1]   -= fy;
+            }
+
+            // Gravity: gentle pull toward canvas center (prevents drift)
+            double cx = 0, cy = 0;
+            for (double[] p : pos.values()) { cx += p[0]; cy += p[1]; }
+            cx /= n; cy /= n;
+            for (String nd : nodes) {
+                disp.get(nd)[0] += (W / 2.0 - cx) * 0.05;
+                disp.get(nd)[1] += (H / 2.0 - cy) * 0.05;
+            }
+
+            // Apply displacement with linear cooling
+            double temp = Math.max(18.0 - iter * 0.045, 1.5);
+            for (String nd : nodes) {
+                double[] p = pos.get(nd), d = disp.get(nd);
+                double dLen = Math.max(Math.sqrt(d[0] * d[0] + d[1] * d[1]), 0.001);
+                double move = Math.min(dLen, temp);
+                p[0] = Math.max(PAD, Math.min(W - PAD, p[0] + (d[0] / dLen) * move));
+                p[1] = Math.max(PAD, Math.min(H - PAD, p[1] + (d[1] / dLen) * move));
+            }
+        }
+
+        // Finalise: convert to integer Points
+        nodePositions.clear();
+        for (String nd : nodes) {
+            double[] p = pos.get(nd);
+            nodePositions.put(nd, new Point((int) p[0], (int) p[1]));
         }
     }
 
@@ -198,7 +278,6 @@ public class TravelingSalesmanApp extends JFrame {
         setVisible(true);
     }
 
-    // ── Header ────────────────────────────────────────────────────────────────
     private JPanel buildHeader(){
         JPanel hdr=new JPanel(new BorderLayout());
         hdr.setBackground(new Color(14,17,22));
@@ -236,7 +315,6 @@ public class TravelingSalesmanApp extends JFrame {
         return hdr;
     }
 
-    // ── Center split ──────────────────────────────────────────────────────────
     private JSplitPane buildCenter(){
         JSplitPane sp=new JSplitPane(JSplitPane.HORIZONTAL_SPLIT,buildMapSection(),buildSidebar());
         sp.setDividerLocation(780); sp.setDividerSize(4);
@@ -285,7 +363,6 @@ public class TravelingSalesmanApp extends JFrame {
         if(arr.length>1) toCombo.setSelectedIndex(1);
     }
 
-    // ── Map Section ───────────────────────────────────────────────────────────
     private JPanel buildMapSection(){
         JPanel wrap=new JPanel(new BorderLayout());
         wrap.setBackground(BG_PANEL);
@@ -303,7 +380,6 @@ public class TravelingSalesmanApp extends JFrame {
         return wrap;
     }
 
-    // ── Sidebar ───────────────────────────────────────────────────────────────
     private JPanel buildSidebar(){
         JPanel sb=new JPanel(); sb.setLayout(new BoxLayout(sb,BoxLayout.Y_AXIS));
         sb.setBackground(BG_PANEL); sb.setBorder(new EmptyBorder(12,6,12,12));
@@ -326,12 +402,10 @@ public class TravelingSalesmanApp extends JFrame {
         card.add(Box.createVerticalStrut(8));
         card.add(dimLbl("OPTIMIZE BY")); card.add(Box.createVerticalStrut(4)); card.add(criteriaCombo);
         card.add(Box.createVerticalStrut(14));
-
         JButton findBtn=makeBtn("FIND SHORTEST ROUTE",ACCENT_GREEN,new Color(8,20,12));
         findBtn.setMaximumSize(new Dimension(Integer.MAX_VALUE,46));
         findBtn.addActionListener(e->runDijkstra());
         card.add(findBtn);
-
         card.add(Box.createVerticalStrut(8));
         JButton replayBtn=makeBtn("REPLAY ANIMATION",ACCENT_AMBER,new Color(22,16,6));
         replayBtn.setMaximumSize(new Dimension(Integer.MAX_VALUE,36));
@@ -347,10 +421,8 @@ public class TravelingSalesmanApp extends JFrame {
         glow.setBorder(BorderFactory.createCompoundBorder(
             BorderFactory.createLineBorder(new Color(60,210,100,45),3),
             BorderFactory.createLineBorder(new Color(60,210,100,100),1)));
-
         JPanel inner=new JPanel(new BorderLayout());
         inner.setBackground(new Color(10,18,12));
-
         JPanel tbar=new JPanel(new BorderLayout());
         tbar.setBackground(new Color(12,28,16));
         tbar.setBorder(BorderFactory.createCompoundBorder(
@@ -361,7 +433,6 @@ public class TravelingSalesmanApp extends JFrame {
         JLabel tsub=new JLabel("Dijkstra Output");
         tsub.setFont(new Font("Monospaced",Font.PLAIN,10)); tsub.setForeground(new Color(50,140,70));
         tbar.add(tlbl,BorderLayout.WEST); tbar.add(tsub,BorderLayout.EAST);
-
         resultArea=new JTextArea();
         resultArea.setFont(new Font("Monospaced",Font.PLAIN,12));
         resultArea.setForeground(new Color(170,255,200));
@@ -373,12 +444,10 @@ public class TravelingSalesmanApp extends JFrame {
             "  Upload a CSV file,\n"+
             "  select nodes, then\n"+
             "  click FIND SHORTEST ROUTE");
-
         JScrollPane scroll=new JScrollPane(resultArea);
         scroll.setBorder(null); scroll.setBackground(new Color(10,18,12));
         scroll.getViewport().setBackground(new Color(10,18,12));
         scroll.setPreferredSize(new Dimension(0,360));
-
         inner.add(tbar,BorderLayout.NORTH); inner.add(scroll,BorderLayout.CENTER);
         glow.add(inner,BorderLayout.CENTER);
         return glow;
@@ -387,10 +456,10 @@ public class TravelingSalesmanApp extends JFrame {
     private JPanel buildLegendCard(){
         JPanel card=roadCard("LEGEND",TEXT_DIM);
         JPanel g=new JPanel(new GridLayout(2,2,8,6)); g.setOpaque(false);
-        g.add(legendItem(NODE_STROKE,     "● City Node"));
-        g.add(legendItem(ROAD_GRAY,       "─ Road"));
-        g.add(legendItem(ACCENT_AMBER,    "─ Shortest Route"));
-        g.add(legendItem(ACCENT_GREEN,    "● Route Node"));
+        g.add(legendItem(NODE_STROKE,  "● City Node"));
+        g.add(legendItem(ROAD_GRAY,    "─ Road"));
+        g.add(legendItem(ACCENT_AMBER, "─ Shortest Route"));
+        g.add(legendItem(ACCENT_GREEN, "● Route Node"));
         card.add(g);
         return card;
     }
@@ -411,7 +480,6 @@ public class TravelingSalesmanApp extends JFrame {
         return bar;
     }
 
-    // ── Run Dijkstra ──────────────────────────────────────────────────────────
     @SuppressWarnings("unchecked")
     private void runDijkstra(){
         stopCarAnimation();
@@ -485,7 +553,7 @@ public class TravelingSalesmanApp extends JFrame {
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    //  Node Map Panel — Road Map with animated car
+    //  Node Map Panel
     // ════════════════════════════════════════════════════════════════════════
     class NodeMapPanel extends JPanel {
         private String hoveredNode=null;
@@ -522,39 +590,147 @@ public class TravelingSalesmanApp extends JFrame {
             drawCar(g2);
         }
 
-        // ── Map Background ─────────────────────────────────────────────────
         private void drawMapBg(Graphics2D g2){
-            int w=getWidth(),h=getHeight();
-            // Terrain base — dark green-grey like a satellite map
-            GradientPaint gp=new GradientPaint(0,0,new Color(18,26,22),w,h,new Color(16,20,26));
-            g2.setPaint(gp); g2.fillRect(0,0,w,h);
+            int w=getWidth(), h=getHeight();
 
-            // Grid lines (map grid)
-            g2.setColor(new Color(255,255,255,8));
-            g2.setStroke(new BasicStroke(0.5f));
-            for(int x=0;x<w;x+=60) g2.drawLine(x,0,x,h);
-            for(int y=0;y<h;y+=60) g2.drawLine(0,y,w,y);
+            // ── 1. Grass / terrain base ──────────────────────────────────
+            // Earthy green-brown like satellite road map terrain
+            GradientPaint grassGrad = new GradientPaint(
+                0, 0,   new Color(58, 80, 42),
+                w, h,   new Color(46, 65, 34));
+            g2.setPaint(grassGrad);
+            g2.fillRect(0, 0, w, h);
 
-            // Subtle dot grid
-            g2.setColor(new Color(255,255,255,14));
-            for(int x=30;x<w;x+=60) for(int y=30;y<h;y+=60) g2.fillOval(x-1,y-1,2,2);
+            // Subtle grass texture — irregular light/dark patches
+            java.util.Random rng = new java.util.Random(42); // fixed seed = stable
+            for(int i=0; i<120; i++){
+                int px = rng.nextInt(w), py = rng.nextInt(h);
+                int pr = 18 + rng.nextInt(38);
+                boolean light = rng.nextBoolean();
+                g2.setColor(light
+                    ? new Color(68, 95, 48, 55)
+                    : new Color(34, 52, 22, 55));
+                g2.fillOval(px-pr/2, py-pr/2, pr, pr);
+            }
 
-            // Vignette
-            RadialGradientPaint vig=new RadialGradientPaint(
-                new Point2D.Float(w/2f,h/2f),Math.max(w,h)*0.72f,
-                new float[]{0.35f,1f},
-                new Color[]{new Color(0,0,0,0),new Color(0,0,0,150)});
-            g2.setPaint(vig); g2.fillRect(0,0,w,h);
+            // ── 2. Horizontal road bands (main roads across the map) ─────
+            // These are purely decorative asphalt strips behind the graph
+            int[] roadYs  = { h/6, h/2, 5*h/6 };
+            int[] roadWs  = { 44,  56,  40 };
+            for(int i=0; i<roadYs.length; i++){
+                int ry = roadYs[i], rw = roadWs[i];
+                // Road shoulder / curb
+                g2.setColor(new Color(90, 95, 82, 160));
+                g2.fillRect(0, ry - rw/2 - 5, w, rw + 10);
+                // Asphalt surface
+                g2.setColor(new Color(52, 55, 58, 200));
+                g2.fillRect(0, ry - rw/2, w, rw);
+                // Asphalt surface highlight (subtle lighter centre stripe)
+                g2.setColor(new Color(65, 68, 72, 120));
+                g2.fillRect(0, ry - 4, w, 8);
+                // Dashed centre line
+                g2.setColor(new Color(220, 195, 50, 160));
+                g2.setStroke(new BasicStroke(2.2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND,
+                    0, new float[]{18f, 14f}, 0));
+                g2.drawLine(0, ry, w, ry);
+                // Lane edge white lines
+                g2.setColor(new Color(240, 240, 240, 100));
+                g2.setStroke(new BasicStroke(1.2f));
+                g2.drawLine(0, ry - rw/2, w, ry - rw/2);
+                g2.drawLine(0, ry + rw/2, w, ry + rw/2);
+            }
 
-            // Compass rose
-            drawCompass(g2,w-55,h-55,38);
+            // ── 3. Vertical road bands ────────────────────────────────────
+            int[] roadXs  = { w/5, w/2, 4*w/5 };
+            int[] roadVWs = { 38,  52,  36 };
+            for(int i=0; i<roadXs.length; i++){
+                int rx = roadXs[i], rw = roadVWs[i];
+                g2.setColor(new Color(90, 95, 82, 130));
+                g2.fillRect(rx - rw/2 - 5, 0, rw + 10, h);
+                g2.setColor(new Color(52, 55, 58, 185));
+                g2.fillRect(rx - rw/2, 0, rw, h);
+                g2.setColor(new Color(65, 68, 72, 100));
+                g2.fillRect(rx - 4, 0, 8, h);
+                g2.setColor(new Color(220, 195, 50, 140));
+                g2.setStroke(new BasicStroke(2.2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND,
+                    0, new float[]{18f, 14f}, 0));
+                g2.drawLine(rx, 0, rx, h);
+                g2.setColor(new Color(240, 240, 240, 90));
+                g2.setStroke(new BasicStroke(1.2f));
+                g2.drawLine(rx - rw/2, 0, rx - rw/2, h);
+                g2.drawLine(rx + rw/2, 0, rx + rw/2, h);
+            }
+
+            // ── 4. Intersections — slightly lighter asphalt squares ───────
+            int[][] crossInfo = {
+                {roadXs[0], roadYs[0], roadVWs[0], roadWs[0]},
+                {roadXs[0], roadYs[1], roadVWs[0], roadWs[1]},
+                {roadXs[0], roadYs[2], roadVWs[0], roadWs[2]},
+                {roadXs[1], roadYs[0], roadVWs[1], roadWs[0]},
+                {roadXs[1], roadYs[1], roadVWs[1], roadWs[1]},
+                {roadXs[1], roadYs[2], roadVWs[1], roadWs[2]},
+                {roadXs[2], roadYs[0], roadVWs[2], roadWs[0]},
+                {roadXs[2], roadYs[1], roadVWs[2], roadWs[1]},
+                {roadXs[2], roadYs[2], roadVWs[2], roadWs[2]},
+            };
+            for(int[] ci : crossInfo){
+                int xi2=ci[0], yi2=ci[1], iw=ci[2]+10, ih=ci[3]+10;
+                g2.setColor(new Color(60, 63, 67, 210));
+                g2.fillRect(xi2 - iw/2, yi2 - ih/2, iw, ih);
+                g2.setColor(new Color(240, 240, 240, 80));
+                g2.setStroke(new BasicStroke(2f));
+                g2.drawRect(xi2 - iw/2, yi2 - ih/2, iw, ih);
+            }
+
+            // ── 5. Pavement / sidewalk border strips on main roads ────────
+            g2.setStroke(new BasicStroke(1f));
+            for(int yi : roadYs){
+                g2.setColor(new Color(155, 148, 118, 70));
+                g2.fillRect(0, yi - roadWs[0]/2 - 9, w, 4);
+                g2.fillRect(0, yi + roadWs[0]/2 + 5, w, 4);
+            }
+
+            // ── 6. Road markings — pedestrian crossing zebra stripes ─────
+            int[] crossX = { w/5, 4*w/5 };
+            int[] crossY = { h/2 };
+            for(int cx2 : crossX){
+                for(int cy2 : crossY){
+                    int cw = 14, ch = 5, gap = 9;
+                    int stripes = 5;
+                    int totalH  = stripes * ch + (stripes-1) * gap;
+                    int startY  = cy2 - totalH/2;
+                    for(int s=0; s<stripes; s++){
+                        g2.setColor(new Color(255, 255, 255, 70));
+                        g2.fillRect(cx2 - cw/2, startY + s*(ch+gap), cw, ch);
+                    }
+                }
+            }
+
+            // ── 7. Subtle noise / grain over whole background ─────────────
+            rng = new java.util.Random(99);
+            for(int i=0; i<1800; i++){
+                int px = rng.nextInt(w), py = rng.nextInt(h);
+                int alpha = 8 + rng.nextInt(18);
+                g2.setColor(new Color(0, 0, 0, alpha));
+                g2.fillRect(px, py, 1, 1);
+            }
+
+            // ── 8. Vignette — darkens edges for map depth ─────────────────
+            RadialGradientPaint vig = new RadialGradientPaint(
+                new Point2D.Float(w / 2f, h / 2f), Math.max(w, h) * 0.68f,
+                new float[]{0.30f, 1f},
+                new Color[]{new Color(0,0,0,0), new Color(0,0,0,185)});
+            g2.setPaint(vig);
+            g2.fillRect(0, 0, w, h);
+
+            // ── 9. Compass rose ───────────────────────────────────────────
+            drawCompass(g2, w-55, h-55, 38);
         }
 
         private void drawCompass(Graphics2D g2,int cx,int cy,int r){
             g2.setStroke(new BasicStroke(1f));
             g2.setColor(new Color(255,185,30,50)); g2.drawOval(cx-r,cy-r,r*2,r*2);
             g2.setColor(new Color(255,185,30,25)); g2.drawOval(cx-r+6,cy-r+6,(r-6)*2,(r-6)*2);
-            // N arrow
             int[] nax={cx,cx-5,cx+5}; int[] nay={cy-r+4,cy-4,cy-4};
             g2.setColor(new Color(255,185,30,130)); g2.fillPolygon(nax,nay,3);
             int[] sax={cx,cx-4,cx+4}; int[] say={cy+r-4,cy+4,cy+4};
@@ -569,7 +745,6 @@ public class TravelingSalesmanApp extends JFrame {
             g2.setColor(new Color(255,185,30,70)); g2.fillOval(cx-3,cy-3,6,6);
         }
 
-        // ── Draw all roads ─────────────────────────────────────────────────
         private void drawRoads(Graphics2D g2){
             Set<String> pathEdges=new HashSet<>();
             for(int i=0;i<currentPath.size()-1;i++){
@@ -584,17 +759,12 @@ public class TravelingSalesmanApp extends JFrame {
                 Point p1=nodePositions.get(e.from),p2=nodePositions.get(e.to);
                 if(p1==null||p2==null) continue;
                 boolean hov=e.from.equals(hoveredNode)||e.to.equals(hoveredNode);
-
-                // Road casing (shadow/outline)
                 g2.setStroke(new BasicStroke(hov?8f:5.5f,BasicStroke.CAP_ROUND,BasicStroke.JOIN_ROUND));
                 g2.setColor(new Color(20,25,30)); g2.drawLine(p1.x,p1.y,p2.x,p2.y);
-                // Road surface
                 g2.setStroke(new BasicStroke(hov?5f:3.5f,BasicStroke.CAP_ROUND,BasicStroke.JOIN_ROUND));
                 g2.setColor(hov?new Color(80,100,120):new Color(48,56,66)); g2.drawLine(p1.x,p1.y,p2.x,p2.y);
-                // Center lane dashes
                 g2.setStroke(new BasicStroke(1f,BasicStroke.CAP_ROUND,BasicStroke.JOIN_ROUND,0,new float[]{6f,7f},0));
                 g2.setColor(new Color(200,180,60,hov?120:45)); g2.drawLine(p1.x,p1.y,p2.x,p2.y);
-
                 if(hov){
                     int mx=(p1.x+p2.x)/2,my=(p1.y+p2.y)/2;
                     drawRoadTag(g2,String.format("%.0fkm / %.0fmin / %.1fL",e.distance,e.time,e.fuel),
@@ -603,39 +773,28 @@ public class TravelingSalesmanApp extends JFrame {
             }
         }
 
-        // ── Draw shortest path road ────────────────────────────────────────
         private void drawPathRoad(Graphics2D g2){
             if(currentPath.size()<2) return;
             for(int i=0;i<currentPath.size()-1;i++){
                 Point p1=nodePositions.get(currentPath.get(i));
                 Point p2=nodePositions.get(currentPath.get(i+1));
                 if(p1==null||p2==null) continue;
-
-                // Outer glow layers
                 g2.setColor(new Color(255,185,30,12));
                 g2.setStroke(new BasicStroke(26f,BasicStroke.CAP_ROUND,BasicStroke.JOIN_ROUND));
                 g2.drawLine(p1.x,p1.y,p2.x,p2.y);
                 g2.setColor(new Color(255,185,30,28));
                 g2.setStroke(new BasicStroke(16f,BasicStroke.CAP_ROUND,BasicStroke.JOIN_ROUND));
                 g2.drawLine(p1.x,p1.y,p2.x,p2.y);
-
-                // Road casing
                 g2.setColor(new Color(100,65,0));
                 g2.setStroke(new BasicStroke(8f,BasicStroke.CAP_ROUND,BasicStroke.JOIN_ROUND));
                 g2.drawLine(p1.x,p1.y,p2.x,p2.y);
-                // Road surface — amber highway
                 g2.setColor(new Color(190,135,15));
                 g2.setStroke(new BasicStroke(5.5f,BasicStroke.CAP_ROUND,BasicStroke.JOIN_ROUND));
                 g2.drawLine(p1.x,p1.y,p2.x,p2.y);
-                // Center white dashes
                 g2.setColor(new Color(255,255,255,160));
                 g2.setStroke(new BasicStroke(1.4f,BasicStroke.CAP_ROUND,BasicStroke.JOIN_ROUND,0,new float[]{9f,6f},0));
                 g2.drawLine(p1.x,p1.y,p2.x,p2.y);
-
-                // Direction arrow
                 drawArrow(g2,p1,p2);
-
-                // Segment label
                 String a=currentPath.get(i),b=currentPath.get(i+1);
                 for(Edge e:graph.getOrDefault(a,Collections.emptyList())){
                     if(e.to.equals(b)){
@@ -667,51 +826,37 @@ public class TravelingSalesmanApp extends JFrame {
             g2.fillPolygon(xs,ys,3);
         }
 
-        // ── Draw city nodes ────────────────────────────────────────────────
         private void drawCities(Graphics2D g2){
             for(String node:nodes){
                 Point p=nodePositions.get(node); if(p==null) continue;
                 boolean onPath=currentPath.contains(node),hov=node.equals(hoveredNode);
                 boolean isStart=!currentPath.isEmpty()&&node.equals(currentPath.get(0));
                 boolean isEnd  =!currentPath.isEmpty()&&node.equals(currentPath.get(currentPath.size()-1));
-
-                // Glow halo
                 if(onPath||hov){
                     Color gc=isStart?new Color(40,200,180,35):isEnd?new Color(255,185,30,35):
                              onPath?new Color(60,210,100,28):new Color(100,150,220,25);
                     g2.setColor(gc);
                     g2.fillOval(p.x-NODE_R-13,p.y-NODE_R-13,(NODE_R+13)*2,(NODE_R+13)*2);
                 }
-
-                // Drop shadow
                 g2.setColor(new Color(0,0,0,90));
                 g2.fillOval(p.x-NODE_R+3,p.y-NODE_R+3,NODE_R*2,NODE_R*2);
-
-                // Node body — road sign green
                 Color fill=isStart?new Color(0,90,72):isEnd?new Color(85,52,0):
                            onPath?new Color(0,65,32):hov?new Color(18,36,64):new Color(22,30,42);
                 Color stroke=isStart?ACCENT_TEAL:isEnd?ACCENT_AMBER:
                              onPath?ACCENT_GREEN:hov?new Color(120,160,220):new Color(55,75,105);
-
                 g2.setColor(fill); g2.fillOval(p.x-NODE_R,p.y-NODE_R,NODE_R*2,NODE_R*2);
                 g2.setColor(stroke); g2.setStroke(new BasicStroke(onPath||hov?3f:1.8f));
                 g2.drawOval(p.x-NODE_R,p.y-NODE_R,NODE_R*2,NODE_R*2);
-
-                // Inner ring (path nodes)
                 if(onPath){
                     g2.setColor(new Color(stroke.getRed(),stroke.getGreen(),stroke.getBlue(),55));
                     g2.setStroke(new BasicStroke(1f));
                     g2.drawOval(p.x-NODE_R+5,p.y-NODE_R+5,(NODE_R-5)*2,(NODE_R-5)*2);
                 }
-
-                // City name
                 int fs=node.length()>7?8:node.length()>5?9:10;
                 g2.setFont(new Font("Monospaced",Font.BOLD,fs));
                 FontMetrics fm=g2.getFontMetrics();
                 g2.setColor(onPath?new Color(200,255,220):hov?new Color(180,210,255):new Color(175,190,210));
                 g2.drawString(node,p.x-fm.stringWidth(node)/2,p.y+fm.getAscent()/2-1);
-
-                // START / END badge
                 if(isStart||isEnd){
                     String badge=isStart?"START":"END";
                     Color bc=isStart?ACCENT_TEAL:ACCENT_AMBER;
@@ -726,21 +871,15 @@ public class TravelingSalesmanApp extends JFrame {
             }
         }
 
-        // ── Animated Car ───────────────────────────────────────────────────
         private void drawCar(Graphics2D g2){
             if(currentPath.size()<2) return;
             Point2D.Float pos=getCarPos(); if(pos==null) return;
             double angle=getCarAngle();
-
             AffineTransform saved=g2.getTransform();
             g2.translate(pos.x,pos.y);
             g2.rotate(angle);
-
-            // Drop shadow
             g2.setColor(new Color(0,0,0,90));
             g2.fillOval(-14,5,28,9);
-
-            // Headlight cone (when moving)
             if(animating){
                 GradientPaint beam=new GradientPaint(14,0,new Color(255,240,150,70),
                     45,0,new Color(255,240,150,0));
@@ -748,61 +887,38 @@ public class TravelingSalesmanApp extends JFrame {
                 int[] bx={14,48,48}; int[] by={0,-14,14};
                 g2.fillPolygon(bx,by,3);
             }
-
-            // ── Car body (top-down view) ──────────────────────────────────
-            // Main body shape
             RoundRectangle2D body=new RoundRectangle2D.Float(-13,-6,26,12,6,6);
             g2.setColor(new Color(200,45,45)); g2.fill(body);
-
-            // Roof / cabin
             RoundRectangle2D roof=new RoundRectangle2D.Float(-5,-8,14,16,4,4);
             g2.setColor(new Color(170,35,35)); g2.fill(roof);
-
-            // Windshield (front)
             g2.setColor(new Color(160,225,255,210));
             g2.fillRoundRect(4,-5,6,4,2,2);
-            // Rear window
             g2.setColor(new Color(120,180,210,180));
             g2.fillRoundRect(-10,-5,6,4,2,2);
-
-            // Side windows
             g2.setColor(new Color(140,200,235,160));
             g2.fillRoundRect(4,1,6,4,2,2);
             g2.fillRoundRect(-10,1,6,4,2,2);
-
-            // Car outline
             g2.setColor(new Color(240,80,80));
             g2.setStroke(new BasicStroke(0.9f));
             g2.draw(body);
-
-            // Wheels (4 wheels, top-down)
             g2.setColor(new Color(25,25,25));
-            g2.fillRoundRect(-14,-8,7,5,2,2);  // front-left
-            g2.fillRoundRect( 7,-8,7,5,2,2);   // front-right
-            g2.fillRoundRect(-14, 3,7,5,2,2);  // rear-left
-            g2.fillRoundRect( 7, 3,7,5,2,2);   // rear-right
-
-            // Wheel rims
+            g2.fillRoundRect(-14,-8,7,5,2,2);
+            g2.fillRoundRect( 7,-8,7,5,2,2);
+            g2.fillRoundRect(-14, 3,7,5,2,2);
+            g2.fillRoundRect( 7, 3,7,5,2,2);
             g2.setColor(new Color(90,90,90));
             g2.setStroke(new BasicStroke(0.7f));
             g2.drawRoundRect(-14,-8,7,5,2,2);
             g2.drawRoundRect( 7,-8,7,5,2,2);
             g2.drawRoundRect(-14, 3,7,5,2,2);
             g2.drawRoundRect( 7, 3,7,5,2,2);
-
-            // Headlights
             g2.setColor(new Color(255,245,180));
             g2.fillOval(12,-6,4,3); g2.fillOval(12,3,4,3);
-
-            // Taillights
             g2.setColor(new Color(220,50,50));
             g2.fillOval(-16,-6,4,3); g2.fillOval(-16,3,4,3);
-
-            // Center stripe
             g2.setColor(new Color(255,255,255,40));
             g2.setStroke(new BasicStroke(0.8f));
             g2.drawLine(-10,0,10,0);
-
             g2.setTransform(saved);
         }
 
@@ -851,34 +967,24 @@ public class TravelingSalesmanApp extends JFrame {
     }
     private JComboBox<String> roadCombo(String[] items){
         Color cbBg  = new Color(26, 34, 46);
-        Color cbFg  = new Color(255, 185, 30);   // amber — always visible on dark bg
+        Color cbFg  = new Color(255, 185, 30);
         Color selBg = new Color(50, 100, 160);
         JComboBox<String> cb = new JComboBox<>(items);
         cb.setFont(new Font("Monospaced", Font.BOLD, 12));
-        cb.setBackground(cbBg);
-        cb.setForeground(cbFg);
-        cb.setOpaque(true);
+        cb.setBackground(cbBg); cb.setForeground(cbFg); cb.setOpaque(true);
         cb.setMaximumSize(new Dimension(Integer.MAX_VALUE, 34));
         cb.setBorder(BorderFactory.createCompoundBorder(
             BorderFactory.createLineBorder(new Color(80, 100, 130), 1),
             BorderFactory.createEmptyBorder(2, 6, 2, 6)));
-        // Renderer controls both the closed display and open dropdown list
         cb.setRenderer(new DefaultListCellRenderer() {
             @Override
-            public Component getListCellRendererComponent(JList<?> list, Object value,
-                    int index, boolean isSelected, boolean cellHasFocus) {
-                JLabel lbl = (JLabel) super.getListCellRendererComponent(
-                        list, value, index, isSelected, cellHasFocus);
-                lbl.setFont(new Font("Monospaced", Font.BOLD, 12));
-                lbl.setBorder(new EmptyBorder(5, 10, 5, 10));
-                lbl.setOpaque(true);
-                if (isSelected) {
-                    lbl.setBackground(selBg);
-                    lbl.setForeground(Color.WHITE);
-                } else {
-                    lbl.setBackground(cbBg);
-                    lbl.setForeground(cbFg);
-                }
+            public Component getListCellRendererComponent(JList<?> list,Object value,
+                    int index,boolean isSelected,boolean cellHasFocus){
+                JLabel lbl=(JLabel)super.getListCellRendererComponent(list,value,index,isSelected,cellHasFocus);
+                lbl.setFont(new Font("Monospaced",Font.BOLD,12));
+                lbl.setBorder(new EmptyBorder(5,10,5,10)); lbl.setOpaque(true);
+                if(isSelected){lbl.setBackground(selBg);lbl.setForeground(Color.WHITE);}
+                else{lbl.setBackground(cbBg);lbl.setForeground(cbFg);}
                 return lbl;
             }
         });

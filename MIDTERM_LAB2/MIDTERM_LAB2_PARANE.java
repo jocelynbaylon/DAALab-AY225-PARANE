@@ -1,4 +1,4 @@
-package MIDTERM_LABWORK2;
+package MIDTERM_LAB2;
 
 import java.awt.*;
 import java.awt.event.*;
@@ -26,7 +26,7 @@ import javax.swing.filechooser.FileNameExtensionFilter;
  * Feature: Animated car driving along the shortest path
  * Layout : Force-Directed Graph — connected nodes cluster naturally
  */
-public class TravelingSalesmanApp extends JFrame {
+public class MIDTERM_LAB2_PARANE extends JFrame {
 
     // ── Road-Trip Color Palette ───────────────────────────────────────────────
     private static final Color BG_ASPHALT    = new Color(22, 26, 30);
@@ -72,7 +72,7 @@ public class TravelingSalesmanApp extends JFrame {
         }
     }
 
-    public TravelingSalesmanApp(){ buildUI(); }
+    public MIDTERM_LAB2_PARANE(){ buildUI(); }
 
     // ── CSV Loader ────────────────────────────────────────────────────────────
     private boolean loadCSV(String path) {
@@ -1007,6 +1007,6 @@ public class TravelingSalesmanApp extends JFrame {
             UIManager.put("ComboBox.buttonBackground",  new Color(40,50,66));
             UIManager.put("ComboBox.disabledBackground",new Color(26,34,46));
         }catch(Exception ignored){}
-        SwingUtilities.invokeLater(TravelingSalesmanApp::new);
+        SwingUtilities.invokeLater(MIDTERM_LAB2_PARANE::new);
     }
 }
